@@ -5,25 +5,24 @@ from dotenv import load_dotenv
 
 from langchain.agents import create_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from langchain.tools import tool
 
 load_dotenv()
 
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
+GEOCODING_API_URL = os.getenv("GEOCODING_API_URL")
 WEATHER_API_URL = os.getenv("WEATHER_API_URL")
 POLLUTION_API_URL = os.getenv("POLLUTION_API_URL")
-GEOCODING_API_URL = os.getenv("GEOCODING_API_URL")
 
 
 @tool
-def get_weather_details(location: str) -> str:
+def get_coordinates(location: str) -> dict:
     """
-    Get current weather for a city.
-    Example input: Tokyo, Delhi, London
+    Get latitude and longitude for a city.
     """
 
-    # Step 1: Convert city name to coordinates
-    geo_response = requests.get(
+    response = requests.get(
         GEOCODING_API_URL,
         params={
             "q": location,
@@ -33,116 +32,157 @@ def get_weather_details(location: str) -> str:
         timeout=10,
     )
 
-    if geo_response.status_code != 200:
-        return f"Failed to find location: {location}"
+    response.raise_for_status()
 
-    geo_data = geo_response.json()
+    data = response.json()
 
-    if not geo_data:
-        return f"Could not find coordinates for {location}"
+    if not data:
+        return {
+            "error": f"Location '{location}' not found."
+        }
 
-    lat = geo_data[0]["lat"]
-    lon = geo_data[0]["lon"]
-    city = geo_data[0]["name"]
-    country = geo_data[0]["country"]
+    return {
+        "city": data[0]["name"],
+        "country": data[0]["country"],
+        "lat": data[0]["lat"],
+        "lon": data[0]["lon"],
+    }
 
-    # Step 2: Get weather using coordinates
-    weather_response = requests.get(
+
+@tool
+def get_weather(location: str) -> dict:
+    """
+    Get weather information for a city.
+    """
+
+    geo = get_coordinates.invoke({"location": location})
+
+    if "error" in geo:
+        return geo
+
+    response = requests.get(
         WEATHER_API_URL,
         params={
-            "lat": lat,
-            "lon": lon,
+            "lat": geo["lat"],
+            "lon": geo["lon"],
             "appid": WEATHER_API_KEY,
             "units": "metric",
+
         },
         timeout=10,
     )
 
-    if weather_response.status_code != 200:
-        return f"Failed to fetch weather for {location}"
+    response.raise_for_status()
 
-    weather_data = weather_response.json()
+    data = response.json()
 
-    temperature = weather_data["main"]["temp"]
-    feels_like = weather_data["main"]["feels_like"]
-    humidity = weather_data["main"]["humidity"]
-    condition = weather_data["weather"][0]["description"]
-    wind_speed = weather_data["wind"]["speed"]
+    return {
+        "city": geo["city"],
+        "country": geo["country"],
+        "temperature_c": data["main"]["temp"],
+        "feels_like_c": data["main"]["feels_like"],
+        "humidity_percent": data["main"]["humidity"],
+        "pressure_hpa": data["main"]["pressure"],
+        "condition": data["weather"][0]["description"],
+        "wind_speed_mps": data["wind"]["speed"],
+    }
 
-    # Step 3: Get API details
 
-    air_pollution_response = requests.get(
+@tool
+def get_air_quality(location: str) -> dict:
+    """
+    Get air quality information for a city.
+    """
+
+    geo = get_coordinates.invoke({"location": location})
+
+    if "error" in geo:
+        return geo
+
+    response = requests.get(
         POLLUTION_API_URL,
         params={
-            "lat": lat,
-            "lon": lon,
+            "lat": geo["lat"],
+            "lon": geo["lon"],
             "appid": WEATHER_API_KEY,
         },
         timeout=10,
     )
 
-    if air_pollution_response.status_code != 200:
-        return f"Failed to fetch air pollution data for {location}"
-    
-    air_pollution_data = air_pollution_response.json()
+    response.raise_for_status()
 
-    api_index = air_pollution_data["list"][0]["main"]["aqi"]
-    co_level = air_pollution_data["list"][0]["components"]["co"]
-    no_level = air_pollution_data["list"][0]["components"]["no"]
-    no2_level = air_pollution_data["list"][0]["components"]["no2"]
-    o3_level = air_pollution_data["list"][0]["components"]["o3"]
-    so2_level = air_pollution_data["list"][0]["components"]["so2"]
-    pm2_5_level = air_pollution_data["list"][0]["components"]["pm2_5"]
-    pm10_level = air_pollution_data["list"][0]["components"]["pm10"]
-    nh3_level = air_pollution_data["list"][0]["components"]["nh3"]
+    data = response.json()
 
-    """ Only return what details are requested by the user. 
-    For example, if the user only asks for temperature, then only return temperature. 
-    If the user asks for all AQI details, then return AQI details. 
-    If the user asks for all details, then return all details. """
+    if not data.get("list"):
+        return {
+            "error": "Air quality data unavailable."
+        }
 
-    return (
-        f"Weather in {city}, {country}\n"
-        f"Condition: {condition}\n"
-        f"Temperature: {temperature}°C\n"
-        f"Feels Like: {feels_like}°C\n"
-        f"Humidity: {humidity}%\n"
-        f"Wind Speed: {wind_speed} m/s\n"
-        f"Air Quality Index: {api_index}\n"
-        f"Carbon Monoxide: {co_level} μg/m³\n"
-        f"Nitrogen Oxide: {no_level} μg/m³\n"
-        f"Nitrogen Dioxide: {no2_level} μg/m³\n"
-        f"Ozone: {o3_level} μg/m³\n"
-        f" sulfur Dioxide: {so2_level} μg/m³\n"
-        f"Particulate Matter (2.5): {pm2_5_level} μg/m³\n"
-        f"Particulate Matter (10): {pm10_level} μg/m³\n"
-        f"Ammonia: {nh3_level} μg/m³\n"
-    )
+    pollution = data["list"][0]
+
+    return {
+        "city": geo["city"],
+        "country": geo["country"],
+        "aqi": pollution["main"]["aqi"],
+        "co": pollution["components"]["co"],
+        "no": pollution["components"]["no"],
+        "no2": pollution["components"]["no2"],
+        "o3": pollution["components"]["o3"],
+        "so2": pollution["components"]["so2"],
+        "pm2_5": pollution["components"]["pm2_5"],
+        "pm10": pollution["components"]["pm10"],
+        "nh3": pollution["components"]["nh3"],
+    }
 
 
-model = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+model = ChatOllama(
+    model="gemma4:31b-cloud",
     temperature=0,
 )
 
 agent = create_agent(
     model=model,
-    tools=[get_weather_details],
-    system_prompt=(
-        "You are a helpful weather assistant. "
-        "Use the weather tool whenever weather information is requested."
-    ),
+    tools=[
+        get_coordinates,
+        get_weather,
+        get_air_quality,
+    ],
+    system_prompt="""
+    You are a weather and air-quality assistant.
+
+    Always use tools when weather or pollution data is requested.
+
+    Rules:
+    - If user asks temperature, use get_weather.
+    - If user asks humidity, use get_weather.
+    - If user asks AQI or pollution, use get_air_quality.
+    - If user asks for complete weather report, use get_weather.
+    - If user asks for both weather and pollution, call both tools.
+    - Present information in a clean human-readable format.
+    - Never make up weather data.
+    """,
 )
 
-response = agent.invoke(
-    {
-        "messages": [
+while True:
+    query = input("\nYou: ")
+
+    if query.lower() in {"exit", "quit"}:
+        break
+
+    try:
+        response = agent.invoke(
             {
-                "role": "user",
-                "content": "What's the weather in Tokyo?"
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": query,
+                    }
+                ]
             }
-        ]
-    }
-)
+        )
 
-print(response["messages"][-1].content)
+        print("\nAssistant:"),
+        print(response["messages"][-1].content),
+
+    except Exception as e:
+        print(f"\nError: {e}")
