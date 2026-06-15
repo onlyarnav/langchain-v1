@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+from typing_methods import TypeDict
 from langchain_ollama import ChatOllama
 
 load_dotenv()
@@ -15,7 +16,16 @@ model = ChatOllama(
     system_prompt="You are a helpful assistant that provides details of movie in a structured format."
 )
 
-model_structure = model.with_structured_output(Movie)
+class MovieType(TypeDict):
+    title: str
+    year: int
+    director: str
+    genre: str
 
-resp = model_structure.invoke("tell me about movie Inception")
-resp
+model_structure_basemodel = model.with_structured_output(Movie)
+model_structure_typedict = model.with_structured_output(MovieType)
+
+resp1 = model_structure_basemodel.invoke("tell me about movie Inception")
+resp2 = model_structure_typedict.invoke("tell me about movie Inception")
+resp1
+resp2
